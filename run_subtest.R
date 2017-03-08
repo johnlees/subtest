@@ -1,6 +1,13 @@
 require(snpStats)
 require(Subtest)
 
+library(foreach)
+library(doParallel)
+
+cores=detectCores()
+cl <- makeCluster(cores[1])
+registerDoParallel(cl)
+
 # Wish to test
 # 1) Sp vs. Nm meningitis, using NL data + controls
 # 2) Sp meningitis vs. bacteremia, using DK data + controls
@@ -13,7 +20,7 @@ subtest_p = function(snp_genotypes, ya, yd, both_covariates=NULL, ldak_weights,
   
   # Generate z scores
   z_mat <- matrix()
-  if(!is.null(both_covariates))
+  if(is.null(both_covariates))
   {
     z_mat <- z_scores(snp_genotypes, 
                           ya, 
@@ -29,19 +36,18 @@ subtest_p = function(snp_genotypes, ya, yd, both_covariates=NULL, ldak_weights,
                       both_covariates, 
                       signed = TRUE, control = TRUE)
   }
-  nan_idx <- which(is.nan(z_mat[,1]) | is.nan(z_mat[,2]))
   good_idx <- which(!is.nan(z_mat[,1]) & !is.nan(z_mat[,2]))
   
   # Fit 3 Gaussian mixture to alt and null models
   print("Fitting model")
-  alt_fit <- fit.3g(z_mat[!nan_idx,], pars = start_pars, weights = ldak_weights[!nan_idx,],
+  alt_fit <- fit.3g(z_mat[good_idx,], pars = start_pars, weights = ldak_weights[good_idx],
                       C = 1, fit_null = FALSE, maxit = 10000, tol = 1e-04, sgm = 0.8,
                       one_way = FALSE, syscov = 0, accel = TRUE, verbose = TRUE,
                       file = NULL, n_save = 20, incl_z = TRUE, em = TRUE,
                       control = list(factr = 10))
   
   print("Fitting null model")
-  null_fit <- fit.3g(z_mat[!nan_idx,], pars = start_pars, weights = ldak_weights[!nan_idx,],
+  null_fit <- fit.3g(z_mat[good_idx,], pars = start_pars, weights = ldak_weights[good_idx],
                     C = 1, fit_null = TRUE, maxit = 10000, tol = 1e-04, sgm = 0.8,
                     one_way = FALSE, syscov = 0, accel = TRUE, verbose = TRUE,
                     file = NULL, n_save = 20, incl_z = TRUE, em = TRUE,
@@ -54,7 +60,7 @@ subtest_p = function(snp_genotypes, ya, yd, both_covariates=NULL, ldak_weights,
   # Use subsampling to estimate null distribution of PLR
   # Generate starting parameter vector  - s1 and pi1 are fixed
   print("Generate starting parameters")
-  ff = fit.em(z_mat[!nan_idx,1], weights=ldak_weights[!nan_idx], pi0_init=0.999)
+  ff = fit.em(z_mat[good_idx,1], weights=ldak_weights[good_idx], pi0_init=0.999)
   s1 = ff$sigma
   pi1 = 1 - ff$pi0; 
   pi0 = 1-(2*pi1)
@@ -62,25 +68,44 @@ subtest_p = function(snp_genotypes, ya, yd, both_covariates=NULL, ldak_weights,
   print(parsx)
   
   # Create subsamples of the case group
-  sims = matrix(data = NA, nrow = rand_samples, ncol = 8)
-  case_idxs = which(ya[good_idx] == 1)
-  for (it in 1:rand_samples)
+  sims = matrix(data = NA, nrow = rand_samples, ncol = 18)
+  case_idxs = which(ya == 1)
+  sims <- foreach(it=1:rand_samples, .combine = cbind) %dopar%
   {
-    print(paste0("Subsample ", i))
-    sample_idxs <- sample(good_idx, sample_size, replace = F)
+    if (it %% cores[1] == 0)
+    {
+      print(paste0("Subsample ", it))
+    }
+    sample_idxs <- sample(case_idxs, sample_size, replace = F)
     # New zd scores
-    sample_z <- cbind(zd_scores(snp_genotypes[sample_idxs,], yd[sample_idxs], both_covariates[sample_idxs], signed = T, control = T), 
+    if(is.null(both_covariates))
+    {
+      sample_z <- cbind(zd_scores(snp_genotypes[sample_idxs,good_idx], 
+                                  yd[sample_idxs], 
+                                  signed = T, control = T), 
+                        z_mat[good_idx,1])
+    }
+    else
+    {
+      sample_z <- cbind(zd_scores(snp_genotypes[sample_idxs,good_idx], 
+                                yd[sample_idxs], 
+                                both_covariates[sample_idxs], 
+                                signed = T, control = T), 
                       ya[sample_idxs])
+    }
     
     # fit the full model C1
-    C1 = fit.cond(sample_z, pars=parsx, fit_null=FALSE)
+    C1 = fit.cond(sample_z, pars=parsx, fit_null=FALSE, 
+                  weights = ldak_weights[good_idx])
     # fit the null model C0
-    C0=fit.cond(sample_z, pars=parsx, fit_null=TRUE)
+    C0 = fit.cond(sample_z, pars=parsx, fit_null=TRUE,
+                  weights = ldak_weights[good_idx])
     
     # summary vector
-    vec = vec=c(C0$logl, C1$logl, C1$logl_a-C0$logl_a, 0, 0, 1, C0$pars, C1$pars)
-    sims[it,] = vec
+    vec = c(C0$logl, C1$logl, C1$logl_a-C0$logl_a, 0, 0, 1, C0$pars, C1$pars)
+    vec
   }
+  saveRDS(sims, file = "sims.Rdata")
   
   # Estimate the null PLR distribution from these simulations:
   print("Calculating null PLR distribution")
