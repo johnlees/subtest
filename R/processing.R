@@ -92,6 +92,7 @@ za
 ##' @param Cd matrix of covariates for computing Z_d; Cd[i,] gives the covariates for sample i corresponding to X[i,]. Cd[i,] is ignored if Yd[i]=NA
 ##' @param signed set to TRUE to return signed Z scores
 ##' @param control set to TRUE to perform genomic control on Z scores##' @export
+##' @export
 ##' @author James Liley
 ##' @examples
 ##' # See examples for function z_scores
