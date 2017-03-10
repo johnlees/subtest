@@ -68,9 +68,11 @@ subtest_p = function(snp_genotypes, ya, yd, both_covariates=NULL, ldak_weights,
   print(parsx)
   
   # Create subsamples of the case group
+  cores=detectCores()
   sims = matrix(data = NA, nrow = rand_samples, ncol = 18)
   case_idxs = which(ya == 1)
-  sims <- foreach(it=1:rand_samples, .combine = cbind) %dopar%
+  sims <- foreach(it=1:rand_samples, .combine = rbind,
+                  .packages=c('snpStats','Subtest')) %dopar%
   {
     if (it %% cores[1] == 0)
     {
